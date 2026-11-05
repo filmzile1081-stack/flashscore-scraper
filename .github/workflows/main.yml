@@ -1,5 +1,5 @@
 
-name: Flashscore Collector - Supabase Test
+name: Flashscore Collector - Data Test
 
 on:
   workflow_dispatch:
@@ -31,6 +31,76 @@ jobs:
       - name: Check Python files
         run: python -m compileall -q .
 
+      - name: Test Flashscore match collection
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+          import time
+          import json
+          import urllib.request
+
+          server = subprocess.Popen(
+              [sys.executable, "run.py"],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.STDOUT
+          )
+
+          try:
+              for attempt in range(30):
+                  try:
+                      urllib.request.urlopen(
+                          "http://127.0.0.1:8000/health",
+                          timeout=3
+                      )
+                      break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise RuntimeError("Flashscore API did not start")
+
+              print("Flashscore API started!")
+
+              url = "http://127.0.0.1:8000/matches?sport=football"
+              request = urllib.request.Request(url)
+
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  data = json.loads(response.read().decode("utf-8"))
+
+              if data.get("error"):
+                  raise RuntimeError(data["error"])
+
+              print("Flashscore HTTP status: 200")
+              print("Response keys:", list(data.keys()))
+
+              competitions = data.get("competitions", [])
+              match_count = data.get("match_count", 0)
+
+              print("Match count:", match_count)
+              print("Competition count:", data.get("competition_count", 0))
+
+              shown = 0
+              for competition in competitions:
+                  for match in competition.get("matches", []):
+                      home = match.get("home", {}).get("name", "?")
+                      away = match.get("away", {}).get("name", "?")
+                      print("MATCH:", home, "-", away)
+                      shown += 1
+                      if shown >= 5:
+                          break
+                  if shown >= 5:
+                      break
+
+              if not competitions:
+                  raise RuntimeError("No football competitions returned")
+
+              print("Flashscore match test successful!")
+
+          finally:
+              server.terminate()
+              server.wait(timeout=10)
+          PY
+
       - name: Test Supabase connection
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -43,26 +113,17 @@ jobs:
           url = os.environ["SUPABASE_URL"].rstrip("/")
           key = os.environ["SUPABASE_SECRET_KEY"]
 
-          if not url or not key:
-              raise RuntimeError("Supabase secrets are missing")
-
           request = urllib.request.Request(
               url + "/rest/v1/matches?select=id&limit=1",
-              headers={"apikey": key},
-              method="GET"
+              headers={"apikey": key}
           )
 
-          try:
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  print("Supabase HTTP status:", response.status)
-                  if response.status != 200:
-                      raise RuntimeError("Supabase connection failed")
-          except Exception as error:
-              print("Supabase connection error:", type(error).__name__)
-              raise
+          with urllib.request.urlopen(request, timeout=30) as response:
+              print("Supabase HTTP status:", response.status)
 
           print("Supabase connection successful!")
           PY
 
       - name: Test completed
-        run: echo "Python and Supabase tests successful!"
+        run: echo "Flashscore and Supabase tests successful!"
+        
