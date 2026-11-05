@@ -1,0 +1,157 @@
+name: Test Flashscore Bookmakers TR vs GB
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-bookmakers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compare TR and GB bookmakers
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
+          import time
+          import urllib.request
+          from urllib.parse import urlencode
+          from datetime import datetime, timezone
+
+          API = "http://127.0.0.1:8000"
+          server = subprocess.Popen(
+              [sys.executable, "run.py"],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.STDOUT
+          )
+
+          def get_json(url, timeout=90):
+              with urllib.request.urlopen(url, timeout=timeout) as r:
+                  return json.loads(r.read().decode("utf-8"))
+
+          try:
+              for _ in range(45):
+                  try:
+                      get_json(API + "/health", 3)
+                      break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise RuntimeError("API baslatilamadi")
+
+              data = get_json(API + "/matches?sport=football")
+              now = datetime.now(timezone.utc)
+              candidates = []
+
+              for comp in data.get("competitions", []):
+                  for match in comp.get("matches", []):
+                      if not match.get("id"):
+                          continue
+
+                      status = str(match.get("status", "")).lower()
+                      if any(x in status for x in (
+                          "finished", "ended", "cancelled",
+                          "postponed", "abandoned"
+                      )):
+                          continue
+
+                      start = match.get("start_time")
+                      if start:
+                          try:
+                              dt = datetime.fromisoformat(
+                                  str(start).replace("Z", "+00:00")
+                              )
+                              if dt.tzinfo is None:
+                                  dt = dt.replace(tzinfo=timezone.utc)
+                              if dt < now:
+                                  continue
+                          except ValueError:
+                              continue
+
+                      candidates.append((match, comp))
+
+              if not candidates:
+                  raise RuntimeError("Test icin mac bulunamadi")
+
+              match, comp = candidates[0]
+              match_id = str(match["id"])
+
+              print("TEST MACI:",
+                    match.get("home", {}).get("name"),
+                    "-",
+                    match.get("away", {}).get("name"))
+              print("MAC ID:", match_id)
+
+              results = {}
+
+              for geo in ("TR", "GB"):
+                  params = urlencode({
+                      "match": match_id,
+                      "bet_type": "home-draw-away",
+                      "bet_scope": "full-time",
+                      "geo": geo
+                  })
+
+                  payload = get_json(
+                      API + "/matches/odds?" + params
+                  )
+
+                  books = {}
+                  for market in payload.get("markets", []):
+                      book = market.get("bookmaker") or {}
+                      if book.get("name"):
+                          books[str(book.get("id", ""))] = book["name"]
+
+                  results[geo] = books
+
+                  print("\nBOLGE:", geo)
+                  print("BOOKMAKER SAYISI:", len(books))
+
+                  for book_id, name in sorted(
+                      books.items(),
+                      key=lambda x: x[1].lower()
+                  ):
+                      print("BOOKMAKER:", name, "| ID:", book_id)
+
+              print("\nHEDEF KONTROLU")
+
+              for target in ("Nesine", "bet365"):
+                  found = False
+                  for geo, books in results.items():
+                      for book_id, name in books.items():
+                          if target.casefold() in name.casefold():
+                              print(
+                                  target, "BULUNDU:",
+                                  name, "| GEO:", geo,
+                                  "| ID:", book_id
+                              )
+                              found = True
+
+                  if not found:
+                      print(target, "BULUNAMADI")
+
+          finally:
+              server.terminate()
+              try:
+                  server.wait(timeout=10)
+              except Exception:
+                  server.kill()
+          PY
