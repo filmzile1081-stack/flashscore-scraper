@@ -126,4 +126,92 @@ jobs:
 
       - name: Test completed
         run: echo "Flashscore and Supabase tests successful!"
+
+        
+      - name: Test Flashscore odds
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+          import time
+          import json
+          import urllib.request
+          from urllib.parse import urlencode
+
+          server = subprocess.Popen(
+              [sys.executable, "run.py"],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.STDOUT
+          )
+
+          try:
+              for attempt in range(30):
+                  try:
+                      urllib.request.urlopen(
+                          "http://127.0.0.1:8000/health",
+                          timeout=3
+                      )
+                      break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise RuntimeError("API did not start")
+
+              url = "http://127.0.0.1:8000/matches?sport=football"
+              with urllib.request.urlopen(url, timeout=90) as response:
+                  matches_data = json.loads(response.read().decode("utf-8"))
+
+              all_matches = []
+              for competition in matches_data.get("competitions", []):
+                  all_matches.extend(competition.get("matches", []))
+
+              match = next(
+                  (item for item in all_matches if item.get("id")),
+                  None
+              )
+
+              if not match:
+                  raise RuntimeError("No match ID found")
+
+              print("Selected match:", match["id"])
+              print(
+                  match.get("home", {}).get("name", "?"),
+                  "-",
+                  match.get("away", {}).get("name", "?")
+              )
+
+              params = urlencode({
+                  "match": match["id"],
+                  "bet_type": "home-draw-away",
+                  "bet_scope": "full-time",
+                  "geo": "TR"
+              })
+
+              odds_url = "http://127.0.0.1:8000/matches/odds?" + params
+
+              try:
+                  with urllib.request.urlopen(odds_url, timeout=90) as response:
+                      odds_data = json.loads(
+                          response.read().decode("utf-8")
+                      )
+                      print("Odds HTTP status:", response.status)
+              except urllib.error.HTTPError as error:
+                  print("Odds HTTP error:", error.code)
+                  print(error.read().decode("utf-8")[:3000])
+                  raise
+
+              print("Odds response keys:", list(odds_data.keys()))
+              print("ODDS DATA:")
+              print(json.dumps(odds_data, ensure_ascii=False)[:5000])
+
+              if odds_data.get("error"):
+                  raise RuntimeError(str(odds_data["error"]))
+
+              print("Flashscore odds test completed!")
+
+          finally:
+              server.terminate()
+              server.wait(timeout=10)
+          PY
+          
         
