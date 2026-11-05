@@ -623,4 +623,19 @@ jobs:
                       total_saved += saved
                       successful += 1
 
-                      prin
+                       print("--------------------------------")
+                            print("MATCHES PROCESSED:", successful)
+                            print("MATCH ERRORS:", failed)
+                            print("NEW ODDS RECORDS:", total_saved)
+                            print("COLLECTOR FINISHED")
+
+                       finally:
+          server.terminate()
+
+          try:
+              server.wait(timeout=10)
+          except subprocess.TimeoutExpired:
+              server.kill()
+              server.wait()
+
+          PY
