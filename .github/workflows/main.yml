@@ -52,7 +52,7 @@ jobs:
           import urllib.request
           import urllib.error
           from urllib.parse import urlencode
-          from datetime import datetime, timezone, timedelta
+          from datetime import datetime, timezone
 
           BASE = os.environ["SUPABASE_URL"].rstrip("/")
           KEY = os.environ["SUPABASE_SECRET_KEY"]
@@ -69,18 +69,25 @@ jobs:
           def parse_date(value):
               if not value:
                   return None
+
               try:
                   result = datetime.fromisoformat(
                       str(value).replace("Z", "+00:00")
                   )
+
                   if result.tzinfo is None:
-                      result = result.replace(tzinfo=timezone.utc)
+                      result = result.replace(
+                          tzinfo=timezone.utc
+                      )
+
                   return result
+
               except (ValueError, TypeError):
                   return None
 
           def db(method, path, payload=None):
               data = None
+
               if payload is not None:
                   data = json.dumps(payload).encode("utf-8")
 
@@ -98,32 +105,47 @@ jobs:
 
               try:
                   with urllib.request.urlopen(
-                      request, timeout=30
+                      request,
+                      timeout=30
                   ) as response:
+
                       body = response.read().decode("utf-8")
+
                       return json.loads(body) if body else []
+
               except urllib.error.HTTPError as error:
                   detail = error.read().decode(
-                      "utf-8", errors="replace"
+                      "utf-8",
+                      errors="replace"
                   )
+
                   raise RuntimeError(
                       f"Supabase HTTP {error.code}: {detail[:1000]}"
                   )
 
           def get_interval(start_time, status):
-              text = str(status or "").lower()
+              text = str(status or "").lower().strip()
 
               finished_words = [
-                  "finished", "ended", "ft", "cancelled",
-                  "postponed", "abandoned"
+                  "finished",
+                  "ended",
+                  "ft",
+                  "cancelled",
+                  "postponed",
+                  "abandoned"
               ]
 
               if any(word in text for word in finished_words):
                   return None
 
               live_words = [
-                  "live", "in progress", "inprogress",
-                  "halftime", "half time"
+                  "live",
+                  "in progress",
+                  "inprogress",
+                  "halftime",
+                  "half time",
+                  "1st half",
+                  "2nd half"
               ]
 
               if any(word in text for word in live_words):
@@ -134,16 +156,19 @@ jobs:
               if not start:
                   return 60
 
-              minutes = (start - now()).total_seconds() / 60
+              minutes = (
+                  start - now()
+              ).total_seconds() / 60
 
-              if minutes <= 0:
-                  return 5
               if minutes <= 180:
                   return 5
+
               if minutes <= 360:
                   return 10
+
               if minutes <= 720:
                   return 15
+
               if minutes <= 1440:
                   return 30
 
@@ -168,7 +193,10 @@ jobs:
               return latest
 
           def is_due(start_time, status, last_job):
-              interval = get_interval(start_time, status)
+              interval = get_interval(
+                  start_time,
+                  status
+              )
 
               if interval is None:
                   return False
@@ -190,6 +218,9 @@ jobs:
 
               if last_job.get("status") == "failed":
                   return elapsed >= 15
+
+              if last_job.get("status") == "running":
+                  return elapsed >= 20
 
               return elapsed >= interval
 
@@ -215,7 +246,9 @@ jobs:
               if line_value is None:
                   params["line_value"] = "is.null"
               else:
-                  params["line_value"] = "eq." + str(line_value)
+                  params["line_value"] = (
+                      "eq." + str(line_value)
+                  )
 
               rows = db(
                   "GET",
@@ -245,21 +278,27 @@ jobs:
                           "source": "flashscore",
                           "external_bookmaker_id": bookmaker_external_id,
                           "name": bookmaker.get(
-                              "name", bookmaker_external_id
+                              "name",
+                              bookmaker_external_id
                           )
                       }
                   )
 
                   if not bookmaker_rows:
-                      raise RuntimeError("Bookmaker save failed")
+                      raise RuntimeError(
+                          "Bookmaker save failed"
+                      )
 
                   bookmaker_db_id = bookmaker_rows[0]["id"]
 
                   bet_type = market.get(
-                      "bet_type", "unknown"
+                      "bet_type",
+                      "unknown"
                   )
+
                   bet_scope = market.get(
-                      "bet_scope", "full-time"
+                      "bet_scope",
+                      "full-time"
                   )
 
                   market_key = bet_type + ":" + bet_scope
@@ -276,13 +315,22 @@ jobs:
                   )
 
                   if not market_rows:
-                      raise RuntimeError("Market save failed")
+                      raise RuntimeError(
+                          "Market save failed"
+                      )
 
                   market_db_id = market_rows[0]["id"]
 
-                  for selection in market.get("selections", []):
+                  for selection in market.get(
+                      "selections",
+                      []
+                  ):
+
                       try:
-                          value = float(selection.get("value"))
+                          value = float(
+                              selection.get("value")
+                          )
+
                       except (TypeError, ValueError):
                           continue
 
@@ -290,13 +338,19 @@ jobs:
                           continue
 
                       selection_name = str(
-                          selection.get("selection", "unknown")
+                          selection.get(
+                              "selection",
+                              "unknown"
+                          )
                       )
 
-                      line_value = selection.get("handicap")
+                      line_value = selection.get(
+                          "handicap"
+                      )
 
                       suspended = not selection.get(
-                          "is_active", True
+                          "is_active",
+                          True
                       )
 
                       common = {
@@ -309,8 +363,10 @@ jobs:
                           "source": "flashscore"
                       }
 
-                      # Açılış oranı: yalnızca ilk kez kaydet.
-                      opening = selection.get("opening_value")
+                      # Açılış oranını yalnızca ilk kez kaydet.
+                      opening = selection.get(
+                          "opening_value"
+                      )
 
                       try:
                           opening = (
@@ -318,10 +374,12 @@ jobs:
                               if opening is not None
                               else None
                           )
+
                       except (TypeError, ValueError):
                           opening = None
 
                       if opening is not None and opening > 1:
+
                           old_opening = get_latest_odds(
                               match_db_id,
                               bookmaker_db_id,
@@ -341,9 +399,10 @@ jobs:
                                       "snapshot_stage": "opening"
                                   }
                               )
+
                               saved += 1
 
-                      # Güncel oran: yalnızca değişirse kaydet.
+                      # Güncel oranı yalnızca değişirse kaydet.
                       previous = get_latest_odds(
                           match_db_id,
                           bookmaker_db_id,
@@ -373,7 +432,9 @@ jobs:
                                   "snapshot_stage": "current"
                               }
                           )
+
                           saved += 1
+
                       else:
                           unchanged += 1
 
@@ -390,6 +451,7 @@ jobs:
           total_saved = 0
 
           try:
+
               # API başlatma kontrolü.
               for attempt in range(45):
                   try:
@@ -398,8 +460,10 @@ jobs:
                           timeout=3
                       )
                       break
+
                   except Exception:
                       time.sleep(1)
+
               else:
                   raise RuntimeError(
                       "Flashscore API did not start"
@@ -412,34 +476,56 @@ jobs:
                   API + "/matches?sport=football",
                   timeout=90
               ) as response:
+
                   data = json.loads(
                       response.read().decode("utf-8")
                   )
 
-              competitions = data.get("competitions", [])
+              competitions = data.get(
+                  "competitions",
+                  []
+              )
 
               all_matches = []
 
               for competition in competitions:
-                  for item in competition.get("matches", []):
+
+                  for item in competition.get(
+                      "matches",
+                      []
+                  ):
+
                       if item.get("id"):
                           item["_competition"] = competition
                           all_matches.append(item)
 
               print("Total matches:", len(all_matches))
 
-              # Supabase bağlantı ve geçmiş iş kontrolü.
-              db("GET", "matches?select=id&limit=1")
+              # Supabase bağlantısını kontrol et.
+              db(
+                  "GET",
+                  "matches?select=id&limit=1"
+              )
 
               last_jobs = get_last_jobs()
 
               due_matches = []
 
               for item in all_matches:
-                  status = item.get("status", "scheduled")
-                  start_time = item.get("start_time")
 
-                  if get_interval(start_time, status) is None:
+                  status = item.get(
+                      "status",
+                      "scheduled"
+                  )
+
+                  start_time = item.get(
+                      "start_time"
+                  )
+
+                  if get_interval(
+                      start_time,
+                      status
+                  ) is None:
                       continue
 
                   external_id = str(item["id"])
@@ -448,24 +534,33 @@ jobs:
                       "GET",
                       "matches?select=id&source=eq.flashscore"
                       "&external_match_id=eq."
-                      + external_id + "&limit=1"
+                      + external_id
+                      + "&limit=1"
                   )
 
                   match_db_id = (
-                      existing[0]["id"] if existing else None
+                      existing[0]["id"]
+                      if existing
+                      else None
                   )
 
                   last_job = (
                       last_jobs.get(match_db_id)
-                      if match_db_id else None
+                      if match_db_id
+                      else None
                   )
 
-                  if is_due(start_time, status, last_job):
+                  if is_due(
+                      start_time,
+                      status,
+                      last_job
+                  ):
+
                       due_matches.append(
                           (item, match_db_id, last_job)
                       )
 
-              # Önce en uzun süredir taranmayan maçlar.
+              # En uzun süredir taranmayan maçları öncele.
               def sort_key(entry):
                   item, match_db_id, last_job = entry
 
@@ -473,7 +568,9 @@ jobs:
 
                   if last_job:
                       previous = (
-                          parse_date(last_job.get("executed_at"))
+                          parse_date(
+                              last_job.get("executed_at")
+                          )
                           or parse_date(
                               last_job.get("created_at")
                           )
@@ -482,7 +579,10 @@ jobs:
                   return (
                       previous
                       or datetime(
-                          2000, 1, 1, tzinfo=timezone.utc
+                          2000,
+                          1,
+                          1,
+                          tzinfo=timezone.utc
                       )
                   )
 
@@ -492,44 +592,64 @@ jobs:
                   :MAX_MATCHES_PER_RUN
               ]
 
-              print("Due matches:", len(due_matches))
+              print(
+                  "Due matches:",
+                  len(due_matches)
+              )
+
               print(
                   "Selected this run:",
                   len(selected_matches)
               )
 
               for item, match_db_id, last_job in selected_matches:
+
                   external_id = str(item["id"])
 
                   competition = item.get(
-                      "_competition", {}
+                      "_competition",
+                      {}
                   )
 
                   home = item.get(
-                      "home", {}
-                  ).get("name", "Unknown")
-
-                  away = item.get(
-                      "away", {}
-                  ).get("name", "Unknown")
-
-                  status = item.get(
-                      "status", "scheduled"
+                      "home",
+                      {}
+                  ).get(
+                      "name",
+                      "Unknown"
                   )
 
-                  start_time = item.get("start_time")
+                  away = item.get(
+                      "away",
+                      {}
+                  ).get(
+                      "name",
+                      "Unknown"
+                  )
+
+                  status = item.get(
+                      "status",
+                      "scheduled"
+                  )
+
+                  start_time = item.get(
+                      "start_time"
+                  )
 
                   if not start_time:
                       print(
                           "SKIP missing start time:",
-                          home, "-", away
+                          home,
+                          "-",
+                          away
                       )
                       continue
 
                   job_id = None
 
                   try:
-                      # Önce maçı kaydet.
+
+                      # Önce maçı Supabase'e kaydet.
                       match_payload = {
                           "source": "flashscore",
                           "external_match_id": external_id,
@@ -555,7 +675,9 @@ jobs:
                       match_db_id = match_rows[0]["id"]
 
                       # Maç kaydedildikten sonra iş oluştur.
-                      parsed_start = parse_date(start_time)
+                      parsed_start = parse_date(
+                          start_time
+                      )
 
                       stage = (
                           "live"
@@ -564,7 +686,7 @@ jobs:
                       )
 
                       attempts = 1
-
+                      
                       if last_job:
                           attempts = (
                               int(last_job.get("attempts") or 0) + 1
@@ -582,12 +704,8 @@ jobs:
                           }
                       )
 
-                      job_id = (
-                          job_rows[0]["id"]
-                          if job_rows else None
-                      )
+                      job_id = job_rows[0]["id"] if job_rows else None
 
-                      # Doğrulanmış 1X2 marketi.
                       params = urlencode({
                           "match": external_id,
                           "bet_type": "home-draw-away",
@@ -604,16 +722,12 @@ jobs:
                           )
 
                       if odds_data.get("error"):
-                          raise RuntimeError(
-                              str(odds_data["error"])
-                          )
+                          raise RuntimeError(str(odds_data["error"]))
 
                       markets = odds_data.get("markets", [])
 
                       if not markets:
-                          raise RuntimeError(
-                              "No odds markets returned"
-                          )
+                          raise RuntimeError("No odds markets returned")
 
                       saved, unchanged = save_odds(
                           match_db_id,
@@ -623,19 +737,60 @@ jobs:
                       total_saved += saved
                       successful += 1
 
-                       print("--------------------------------")
-                            print("MATCHES PROCESSED:", successful)
-                            print("MATCH ERRORS:", failed)
-                            print("NEW ODDS RECORDS:", total_saved)
-                            print("COLLECTOR FINISHED")
+                      if job_id:
+                          db(
+                              "PATCH",
+                              "collection_jobs?id=eq." + str(job_id),
+                              {
+                                  "status": "success",
+                                  "executed_at": now().isoformat(),
+                                  "error_message": None
+                              }
+                          )
 
-                       finally:
-          server.terminate()
+                      print(
+                          "SUCCESS:",
+                          home, "-", away,
+                          "| New:", saved,
+                          "| Unchanged:", unchanged
+                      )
 
-          try:
-              server.wait(timeout=10)
-          except subprocess.TimeoutExpired:
-              server.kill()
-              server.wait()
+                  except Exception as error:
+                      failed += 1
+                      print(
+                          "ERROR:",
+                          home, "-", away,
+                          "|", str(error)
+                      )
+
+                      if job_id:
+                          try:
+                              db(
+                                  "PATCH",
+                                  "collection_jobs?id=eq." + str(job_id),
+                                  {
+                                      "status": "failed",
+                                      "executed_at": now().isoformat(),
+                                      "error_message": str(error)[:1000]
+                                  }
+                              )
+                          except Exception as update_error:
+                              print("JOB UPDATE ERROR:", str(update_error))
+
+              print("--------------------------------")
+              print("MATCHES PROCESSED:", successful)
+              print("MATCH ERRORS:", failed)
+              print("NEW ODDS RECORDS:", total_saved)
+              print("COLLECTOR FINISHED")
+
+          finally:
+              server.terminate()
+
+              try:
+                  server.wait(timeout=10)
+              except subprocess.TimeoutExpired:
+                  server.kill()
+                  server.wait()
 
           PY
+     
