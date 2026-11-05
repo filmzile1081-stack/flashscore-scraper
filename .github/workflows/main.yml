@@ -1,5 +1,5 @@
 
-name: Flashscore Collector - Data Test
+name: Flashscore Collector - Supabase Data Test
 
 on:
   workflow_dispatch:
@@ -31,14 +31,47 @@ jobs:
       - name: Check Python files
         run: python -m compileall -q .
 
-      - name: Test Flashscore match collection
+      - name: Collect and save test odds
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: |
           python - <<'PY'
-          import subprocess
+          import os
           import sys
-          import time
           import json
+          import time
+          import subprocess
           import urllib.request
+          import urllib.error
+          from urllib.parse import urlencode
+
+          base = os.environ["SUPABASE_URL"].rstrip("/")
+          key = os.environ["SUPABASE_SECRET_KEY"]
+
+          if not base or not key:
+              raise RuntimeError("Supabase secrets are missing")
+
+          def db(method, path, payload=None):
+              data = None
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+
+              request = urllib.request.Request(
+                  base + "/rest/v1/" + path,
+                  data=data,
+                  method=method,
+                  headers={
+                      "apikey": key,
+                      "Authorization": "Bearer " + key,
+                      "Content-Type": "application/json",
+                      "Prefer": "resolution=merge-duplicates,return=representation"
+                  }
+              )
+
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read().decode("utf-8")
+                  return json.loads(body) if body else []
 
           server = subprocess.Popen(
               [sys.executable, "run.py"],
@@ -47,6 +80,7 @@ jobs:
           )
 
           try:
+              # Flashscore API başlat
               for attempt in range(30):
                   try:
                       urllib.request.urlopen(
@@ -61,157 +95,207 @@ jobs:
 
               print("Flashscore API started!")
 
-              url = "http://127.0.0.1:8000/matches?sport=football"
-              request = urllib.request.Request(url)
+              # Maçları çek
+              matches_url = "http://127.0.0.1:8000/matches?sport=football"
 
-              with urllib.request.urlopen(request, timeout=90) as response:
-                  data = json.loads(response.read().decode("utf-8"))
+              with urllib.request.urlopen(matches_url, timeout=90) as response:
+                  matches_data = json.loads(
+                      response.read().decode("utf-8")
+                  )
 
-              if data.get("error"):
-                  raise RuntimeError(data["error"])
+              competitions = matches_data.get("competitions", [])
+              print("Match count:", matches_data.get("match_count", 0))
+              print("Competition count:", len(competitions))
 
-              print("Flashscore HTTP status: 200")
-              print("Response keys:", list(data.keys()))
+              selected = None
+              selected_competition = {}
 
-              competitions = data.get("competitions", [])
-              match_count = data.get("match_count", 0)
-
-              print("Match count:", match_count)
-              print("Competition count:", data.get("competition_count", 0))
-
-              shown = 0
               for competition in competitions:
-                  for match in competition.get("matches", []):
-                      home = match.get("home", {}).get("name", "?")
-                      away = match.get("away", {}).get("name", "?")
-                      print("MATCH:", home, "-", away)
-                      shown += 1
-                      if shown >= 5:
+                  for item in competition.get("matches", []):
+                      if item.get("id"):
+                          selected = item
+                          selected_competition = competition
                           break
-                  if shown >= 5:
+                  if selected:
                       break
 
-              if not competitions:
-                  raise RuntimeError("No football competitions returned")
-
-              print("Flashscore match test successful!")
-
-          finally:
-              server.terminate()
-              server.wait(timeout=10)
-          PY
-
-      - name: Test Supabase connection
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-        run: |
-          python - <<'PY'
-          import os
-          import urllib.request
-
-          url = os.environ["SUPABASE_URL"].rstrip("/")
-          key = os.environ["SUPABASE_SECRET_KEY"]
-
-          request = urllib.request.Request(
-              url + "/rest/v1/matches?select=id&limit=1",
-              headers={"apikey": key}
-          )
-
-          with urllib.request.urlopen(request, timeout=30) as response:
-              print("Supabase HTTP status:", response.status)
-
-          print("Supabase connection successful!")
-          PY
-
-      - name: Test completed
-        run: echo "Flashscore and Supabase tests successful!"
-
-        
-      - name: Test Flashscore odds
-        run: |
-          python - <<'PY'
-          import subprocess
-          import sys
-          import time
-          import json
-          import urllib.request
-          from urllib.parse import urlencode
-
-          server = subprocess.Popen(
-              [sys.executable, "run.py"],
-              stdout=subprocess.DEVNULL,
-              stderr=subprocess.STDOUT
-          )
-
-          try:
-              for attempt in range(30):
-                  try:
-                      urllib.request.urlopen(
-                          "http://127.0.0.1:8000/health",
-                          timeout=3
-                      )
-                      break
-                  except Exception:
-                      time.sleep(1)
-              else:
-                  raise RuntimeError("API did not start")
-
-              url = "http://127.0.0.1:8000/matches?sport=football"
-              with urllib.request.urlopen(url, timeout=90) as response:
-                  matches_data = json.loads(response.read().decode("utf-8"))
-
-              all_matches = []
-              for competition in matches_data.get("competitions", []):
-                  all_matches.extend(competition.get("matches", []))
-
-              match = next(
-                  (item for item in all_matches if item.get("id")),
-                  None
-              )
-
-              if not match:
+              if not selected:
                   raise RuntimeError("No match ID found")
 
-              print("Selected match:", match["id"])
-              print(
-                  match.get("home", {}).get("name", "?"),
-                  "-",
-                  match.get("away", {}).get("name", "?")
-              )
+              match_id = str(selected["id"])
+              home = selected.get("home", {}).get("name", "Unknown")
+              away = selected.get("away", {}).get("name", "Unknown")
 
+              print("Selected match:", home, "-", away)
+              print("Flashscore match ID:", match_id)
+
+              # Oranları çek
               params = urlencode({
-                  "match": match["id"],
+                  "match": match_id,
                   "bet_type": "home-draw-away",
                   "bet_scope": "full-time",
                   "geo": "TR"
               })
 
-              odds_url = "http://127.0.0.1:8000/matches/odds?" + params
+              odds_url = (
+                  "http://127.0.0.1:8000/matches/odds?" + params
+              )
 
-              try:
-                  with urllib.request.urlopen(odds_url, timeout=90) as response:
-                      odds_data = json.loads(
-                          response.read().decode("utf-8")
-                      )
-                      print("Odds HTTP status:", response.status)
-              except urllib.error.HTTPError as error:
-                  print("Odds HTTP error:", error.code)
-                  print(error.read().decode("utf-8")[:3000])
-                  raise
-
-              print("Odds response keys:", list(odds_data.keys()))
-              print("ODDS DATA:")
-              print(json.dumps(odds_data, ensure_ascii=False)[:5000])
+              with urllib.request.urlopen(odds_url, timeout=90) as response:
+                  odds_data = json.loads(
+                      response.read().decode("utf-8")
+                  )
+                  print("Odds HTTP status:", response.status)
 
               if odds_data.get("error"):
                   raise RuntimeError(str(odds_data["error"]))
 
-              print("Flashscore odds test completed!")
+              markets = odds_data.get("markets", [])
+
+              if not markets:
+                  raise RuntimeError("No odds markets returned")
+
+              print("Odds market count:", len(markets))
+
+              # Supabase bağlantısını kontrol et
+              db("GET", "matches?select=id&limit=1")
+              print("Supabase connection successful!")
+
+              # Maç başlangıç zamanı
+              start = (
+                  selected.get("start_time")
+                  or odds_data.get("start_time")
+              )
+
+              if not start:
+                  raise RuntimeError("Match start time is missing")
+
+              # Maçı kaydet veya güncelle
+              match_rows = db(
+                  "POST",
+                  "matches?on_conflict=source,external_match_id",
+                  {
+                      "source": "flashscore",
+                      "external_match_id": match_id,
+                      "home_team": home,
+                      "away_team": away,
+                      "league": selected_competition.get("name"),
+                      "country": selected_competition.get("country"),
+                      "start_time": start,
+                      "status": odds_data.get("status", "scheduled")
+                  }
+              )
+
+              if not match_rows:
+                  raise RuntimeError("Match database record not returned")
+
+              match_db_id = match_rows[0]["id"]
+              print("Match saved:", match_db_id)
+
+              saved = 0
+
+              # Bahis şirketlerini, marketleri ve oranları kaydet
+              for market in markets:
+                  bookmaker = market.get("bookmaker", {})
+                  bookmaker_external_id = str(bookmaker.get("id", ""))
+
+                  if not bookmaker_external_id:
+                      continue
+
+                  bookmaker_rows = db(
+                      "POST",
+                      "bookmakers?on_conflict=source,external_bookmaker_id",
+                      {
+                          "source": "flashscore",
+                          "external_bookmaker_id": bookmaker_external_id,
+                          "name": bookmaker.get(
+                              "name",
+                              bookmaker_external_id
+                          )
+                      }
+                  )
+
+                  if not bookmaker_rows:
+                      raise RuntimeError("Bookmaker record not returned")
+
+                  bookmaker_db_id = bookmaker_rows[0]["id"]
+
+                  bet_type = market.get("bet_type", "unknown")
+                  bet_scope = market.get("bet_scope", "full-time")
+                  market_key = bet_type + ":" + bet_scope
+
+                  market_rows = db(
+                      "POST",
+                      "odds_markets?on_conflict=market_key",
+                      {
+                          "market_key": market_key,
+                          "market_name": bet_type,
+                          "category": "1X2",
+                          "period": bet_scope
+                      }
+                  )
+
+                  if not market_rows:
+                      raise RuntimeError("Market record not returned")
+
+                  market_db_id = market_rows[0]["id"]
+
+                  for selection in market.get("selections", []):
+                      value = selection.get("value")
+
+                      if value is None or float(value) <= 1:
+                          continue
+
+                      common = {
+                          "match_id": match_db_id,
+                          "bookmaker_id": bookmaker_db_id,
+                          "market_id": market_db_id,
+                          "selection": str(
+                              selection.get("selection", "unknown")
+                          ),
+                          "line_value": selection.get("handicap"),
+                          "is_suspended": not selection.get(
+                              "is_active", True
+                          ),
+                          "source": "flashscore"
+                      }
+
+                      # Güncel oran
+                      db(
+                          "POST",
+                          "odds_history",
+                          {
+                              **common,
+                              "odds": float(value),
+                              "snapshot_stage": "test"
+                          }
+                      )
+                      saved += 1
+
+                      # Açılış oranı
+                      opening = selection.get("opening_value")
+
+                      if opening is not None and float(opening) > 1:
+                          db(
+                              "POST",
+                              "odds_history",
+                              {
+                                  **common,
+                                  "odds": float(opening),
+                                  "snapshot_stage": "opening"
+                              }
+                          )
+                          saved += 1
+
+              if saved == 0:
+                  raise RuntimeError("No odds records were saved")
+
+              print("MATCH SAVED:", home, "-", away)
+              print("ODDS RECORDS SAVED:", saved)
+              print("SUPABASE ODDS SAVE SUCCESSFUL!")
 
           finally:
               server.terminate()
               server.wait(timeout=10)
           PY
           
-        
